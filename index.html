@@ -93,6 +93,10 @@
   #shop-continue { display: block; margin: 20px auto 0; padding: 10px 30px; font-size: 16px; background: #4a7a3f; color: #fff; border: none; border-radius: 6px; cursor: pointer; pointer-events: all; }
   #shop-continue:hover { background: #5a9a4f; }
   #shop-timer { color: #aaa; font-size: 12px; text-align: center; margin-top: 8px; }
+
+  /* Weather */
+  #weather-indicator { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); color: #ccc; font-size: 12px; z-index: 12; pointer-events: none; text-transform: uppercase; letter-spacing: 2px; opacity: 0; transition: opacity 0.5s; }
+  #weather-indicator.visible { opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -128,6 +132,7 @@
 <div id="kill-streak"></div>
 <div id="wave-progress-bg"><div id="wave-progress"></div></div>
 <div id="dmg-numbers"></div>
+<div id="weather-indicator"></div>
 <div id="weapon-bar">
   <div class="weapon-slot active" id="weapon-0"><span class="weapon-key">1</span><span class="weapon-icon">🎯</span><span class="weapon-name">Cannon</span></div>
   <div class="weapon-slot" id="weapon-1"><span class="weapon-key">2</span><span class="weapon-icon">⚡</span><span class="weapon-name">MG</span></div>
@@ -191,6 +196,14 @@ const upgrades = {
 };
 let shopTimer = 0;
 let shopOpen = false;
+
+// Weather system
+const WEATHER_TYPES = ['clear', 'sandstorm', 'rain', 'fog'];
+let currentWeather = 'clear';
+let weatherTimer = 0;
+let weatherParticles = [];
+let rainAudioNode = null;
+let rainGainNode = null;
 
 // ============================================================
 // 2. THREE.JS SETUP
@@ -959,6 +972,205 @@ function spawnWavePowerups() {
 }
 
 // ============================================================
+// 5c. WEATHER SYSTEM
+// ============================================================
+const WEATHER_EFFECTS = {
+  clear:     { fogNear: 80, fogFar: 120, fogColor: 0x87919a, visibility: 1,   groundColor: 0x8b7d5e, skyColor: 0x87919a, label: '' },
+  sandstorm: { fogNear: 20, fogFar: 45,  fogColor: 0xc4a35a, visibility: 0.5, groundColor: 0xa89060, skyColor: 0xc4a35a, label: 'SANDSTORM' },
+  rain:      { fogNear: 35, fogFar: 70,  fogColor: 0x667788, visibility: 0.7, groundColor: 0x6a6a5e, skyColor: 0x556677, label: 'RAIN' },
+  fog:       { fogNear: 15, fogFar: 35,  fogColor: 0x999988, visibility: 0.4, groundColor: 0x8a8a7e, skyColor: 0x999988, label: 'FOG' },
+};
+
+function changeWeather() {
+  // Pick weather based on wave — more extreme at higher waves
+  const roll = Math.random();
+  if (currentWave <= 2) {
+    currentWeather = 'clear';
+  } else if (roll < 0.35) {
+    currentWeather = 'clear';
+  } else if (roll < 0.55) {
+    currentWeather = 'sandstorm';
+  } else if (roll < 0.75) {
+    currentWeather = 'rain';
+  } else if (roll < 0.90) {
+    currentWeather = 'fog';
+  } else {
+    currentWeather = 'clear';
+  }
+
+  const effect = WEATHER_EFFECTS[currentWeather];
+
+  // Update scene fog
+  scene.fog.near = effect.fogNear;
+  scene.fog.far = effect.fogFar;
+  scene.fog.color.setHex(effect.fogColor);
+  scene.background.setHex(effect.skyColor);
+
+  // Update ground color
+  scene.traverse(child => {
+    if (child.geometry && child.geometry.type === 'PlaneGeometry' && child.material.color) {
+      child.material.color.setHex(effect.groundColor);
+    }
+  });
+
+  // Show weather indicator
+  const indicator = document.getElementById('weather-indicator');
+  if (effect.label) {
+    indicator.textContent = effect.label + (currentWeather === 'sandstorm' ? ' — reduced visibility' : currentWeather === 'fog' ? ' — low visibility' : '');
+    indicator.classList.add('visible');
+    setTimeout(() => indicator.classList.remove('visible'), 3000);
+  }
+
+  // Clear old weather particles
+  clearWeatherParticles();
+
+  // Start rain audio
+  if (currentWeather === 'rain') {
+    startRainSound();
+  } else {
+    stopRainSound();
+  }
+
+  // Adjust enemy detect range based on visibility
+  weatherTimer = 0;
+}
+
+function clearWeatherParticles() {
+  weatherParticles.forEach(p => {
+    scene.remove(p.mesh);
+    if (p.mesh.geometry) p.mesh.geometry.dispose();
+    if (p.mesh.material) p.mesh.material.dispose();
+  });
+  weatherParticles = [];
+}
+
+function updateWeather(dt) {
+  if (currentWeather === 'sandstorm') {
+    updateSandstorm(dt);
+  } else if (currentWeather === 'rain') {
+    updateRain(dt);
+  } else if (currentWeather === 'fog') {
+    updateFogEffect(dt);
+  }
+}
+
+function updateSandstorm(dt) {
+  // Spawn sand particles
+  if (weatherParticles.length < 150 && Math.random() < 0.5) {
+    const geo = new THREE.PlaneGeometry(0.3, 0.3);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xc4a35a, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    const px = (Math.random() - 0.5) * 60;
+    const py = Math.random() * 5;
+    const pz = (Math.random() - 0.5) * 60;
+    mesh.position.set(px, py, pz);
+    scene.add(mesh);
+    weatherParticles.push({ mesh, lifetime: 3, age: 0 });
+  }
+
+  // Move sand particles with wind
+  weatherParticles.forEach(p => {
+    p.age += dt;
+    p.mesh.position.x += 12 * dt;
+    p.mesh.position.y += (Math.random() - 0.5) * 2 * dt;
+    p.mesh.rotation.z = Math.random() * 0.1;
+    if (p.age > p.lifetime) {
+      p.mesh.position.x = -30 + Math.random() * 5;
+      p.mesh.position.z = (Math.random() - 0.5) * 60;
+      p.age = 0;
+    }
+  });
+}
+
+function updateRain(dt) {
+  // Spawn rain drops
+  if (weatherParticles.length < 200 && Math.random() < 0.8) {
+    const geo = new THREE.CylinderGeometry(0.01, 0.01, 0.4, 3);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xaabbcc, transparent: true, opacity: 0.4 });
+    const mesh = new THREE.Mesh(geo, mat);
+    const px = (Math.random() - 0.5) * 60;
+    const pz = (Math.random() - 0.5) * 60;
+    mesh.position.set(px, 8 + Math.random() * 5, pz);
+    scene.add(mesh);
+    weatherParticles.push({ mesh, lifetime: 2, age: 0 });
+  }
+
+  weatherParticles.forEach(p => {
+    p.age += dt;
+    p.mesh.position.y -= 15 * dt;
+    if (p.mesh.position.y < 0 || p.age > p.lifetime) {
+      p.mesh.position.y = 8 + Math.random() * 5;
+      p.mesh.position.x = (Math.random() - 0.5) * 60;
+      p.mesh.position.z = (Math.random() - 0.5) * 60;
+      p.age = 0;
+    }
+  });
+}
+
+function updateFogEffect(dt) {
+  // Fog doesn't need particles — just the scene fog density (already set)
+  // But add subtle ground mist
+  if (weatherParticles.length < 30 && Math.random() < 0.1) {
+    const geo = new THREE.PlaneGeometry(3 + Math.random() * 3, 3 + Math.random() * 3);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x999988, transparent: true, opacity: 0.15, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set((Math.random() - 0.5) * 50, 0.3 + Math.random() * 0.5, (Math.random() - 0.5) * 50);
+    mesh.rotation.x = -Math.PI / 2;
+    scene.add(mesh);
+    weatherParticles.push({ mesh, lifetime: 6, age: 0 });
+  }
+
+  weatherParticles.forEach(p => {
+    p.age += dt;
+    p.mesh.position.x += (Math.random() - 0.5) * dt;
+    p.mesh.material.opacity = 0.15 * (1 - p.age / p.lifetime);
+    if (p.age > p.lifetime) {
+      p.mesh.position.set((Math.random() - 0.5) * 50, 0.3 + Math.random() * 0.5, (Math.random() - 0.5) * 50);
+      p.age = 0;
+      p.mesh.material.opacity = 0.15;
+    }
+  });
+}
+
+function startRainSound() {
+  if (rainAudioNode) return;
+  try {
+    const ctx = getAudioCtx();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.02;
+    rainAudioNode = ctx.createBufferSource();
+    rainAudioNode.buffer = buf;
+    rainAudioNode.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 2000;
+    filter.Q.value = 0.5;
+    rainGainNode = ctx.createGain();
+    rainGainNode.gain.value = 0.06;
+    rainAudioNode.connect(filter).connect(rainGainNode).connect(ctx.destination);
+    rainAudioNode.start();
+  } catch(e) {}
+}
+
+function stopRainSound() {
+  if (rainAudioNode) {
+    try {
+      rainAudioNode.stop();
+      rainAudioNode.disconnect();
+      rainGainNode.disconnect();
+    } catch(e) {}
+    rainAudioNode = null;
+    rainGainNode = null;
+  }
+}
+
+// Get effective visibility multiplier for AI
+function getWeatherVisibility() {
+  return WEATHER_EFFECTS[currentWeather].visibility;
+}
+
+// ============================================================
 // 6. PARTICLES
 // ============================================================
 function spawnExplosion(position, count, color, speed, lifetime) {
@@ -1309,11 +1521,14 @@ function updateAI(dt) {
     if (!tr || !ctrl || !mesh) return;
 
     const distToPlayer = tr.position.distanceTo(playerTr.position);
+    const visMult = getWeatherVisibility();
+    const effectiveDetectRange = ENEMY_DETECT_RANGE * visMult;
+    const effectiveFireRange = ENEMY_FIRE_RANGE * visMult;
 
     // State transitions
-    if (distToPlayer < ENEMY_DETECT_RANGE) {
+    if (distToPlayer < effectiveDetectRange) {
       ai.state = 'chase';
-    } else if (ai.state === 'chase' && distToPlayer > ENEMY_DETECT_RANGE * 1.5) {
+    } else if (ai.state === 'chase' && distToPlayer > effectiveDetectRange * 1.5) {
       ai.state = 'patrol';
     }
 
@@ -1332,7 +1547,7 @@ function updateAI(dt) {
       }
     } else {
       // Chase — move toward player but stop at fire range
-      if (distToPlayer > ENEMY_FIRE_RANGE * 0.6) {
+      if (distToPlayer > effectiveFireRange * 0.6) {
         moveTarget = playerTr.position;
       }
     }
@@ -1378,7 +1593,7 @@ function updateAI(dt) {
 
     // Fire at player
     ctrl.lastFired += dt;
-    if (ai.state === 'chase' && distToPlayer < ENEMY_FIRE_RANGE && ctrl.lastFired >= ctrl.reloadTime) {
+    if (ai.state === 'chase' && distToPlayer < effectiveFireRange && ctrl.lastFired >= ctrl.reloadTime) {
       // Check if roughly facing player
       const aimDx = playerTr.position.x - tr.position.x;
       const aimDz = playerTr.position.z - tr.position.z;
@@ -1684,6 +1899,7 @@ function updateWaves(dt) {
       announceWave(currentWave);
       spawnWave(currentWave);
       spawnWavePowerups();
+      changeWeather();
     }
   }
 }
@@ -1980,6 +2196,14 @@ function restartGame() {
   shopOpen = false;
   shopTimer = 0;
   Object.keys(upgrades).forEach(k => upgrades[k].level = 0);
+  currentWeather = 'clear';
+  clearWeatherParticles();
+  stopRainSound();
+  const clearEffect = WEATHER_EFFECTS.clear;
+  scene.fog.near = clearEffect.fogNear;
+  scene.fog.far = clearEffect.fogFar;
+  scene.fog.color.setHex(clearEffect.fogColor);
+  scene.background.setHex(clearEffect.skyColor);
   activePowerups.shield = 0;
   activePowerups.speed = 0;
   activePowerups.rapidfire = 0;
@@ -2019,6 +2243,7 @@ function animate() {
   updateAI(dt);
   updateCombat(dt);
   updatePowerups(dt);
+  updateWeather(dt);
   updateWaves(dt);
   updateCamera(dt);
   updateParticles(dt);
