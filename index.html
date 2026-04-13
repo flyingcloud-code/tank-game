@@ -102,6 +102,18 @@
   #map-announce { position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 20px; font-weight: bold; text-shadow: 0 0 15px rgba(0,0,0,0.8); opacity: 0; z-index: 22; pointer-events: none; transition: opacity 0.5s; letter-spacing: 3px; }
   #map-announce.visible { opacity: 1; }
   #map-announce .map-name { font-size: 36px; display: block; margin-top: 5px; color: #ff8800; }
+
+  /* Boss warning */
+  #boss-warning { position: fixed; top: 30%; left: 50%; transform: translate(-50%, -50%); z-index: 23; pointer-events: none; text-align: center; opacity: 0; transition: opacity 0.3s; }
+  #boss-warning.visible { opacity: 1; }
+  #boss-warning .boss-title { color: #ff2200; font-size: 52px; font-weight: bold; text-shadow: 0 0 30px rgba(255,0,0,0.8), 0 0 60px rgba(255,0,0,0.3); letter-spacing: 6px; animation: bossPulse 0.5s ease-in-out infinite alternate; }
+  #boss-warning .boss-sub { color: #ff8866; font-size: 16px; margin-top: 8px; letter-spacing: 3px; }
+  @keyframes bossPulse { from { transform: scale(1); } to { transform: scale(1.05); } }
+  #boss-hp-bg { position: fixed; bottom: 75px; left: 50%; transform: translateX(-50%); width: 300px; height: 10px; background: rgba(0,0,0,0.6); border: 1px solid #882200; border-radius: 3px; z-index: 16; pointer-events: none; display: none; }
+  #boss-hp-bg.visible { display: block; }
+  #boss-hp { height: 100%; background: linear-gradient(90deg, #cc2200, #ff4400); width: 100%; transition: width 0.3s; }
+  #boss-name { position: fixed; bottom: 88px; left: 50%; transform: translateX(-50%); color: #ff4400; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; z-index: 16; pointer-events: none; display: none; }
+  #boss-name.visible { display: block; }
 </style>
 </head>
 <body>
@@ -139,6 +151,9 @@
 <div id="dmg-numbers"></div>
 <div id="weather-indicator"></div>
 <div id="map-announce"><span class="map-subtitle">ENTERING</span><span class="map-name" id="map-name-text"></span></div>
+<div id="boss-warning"><div class="boss-title">WARNING</div><div class="boss-sub">BOSS TANK INCOMING</div></div>
+<div id="boss-hp-bg"><div id="boss-hp"></div></div>
+<div id="boss-name" id="boss-name-text"></div>
 <div id="weapon-bar">
   <div class="weapon-slot active" id="weapon-0"><span class="weapon-key">1</span><span class="weapon-icon">🎯</span><span class="weapon-name">Cannon</span></div>
   <div class="weapon-slot" id="weapon-1"><span class="weapon-key">2</span><span class="weapon-icon">⚡</span><span class="weapon-name">MG</span></div>
@@ -276,6 +291,11 @@ const BATTLEFIELDS = {
   },
 };
 let currentBattlefield = 'default';
+let bossEntityId = null;
+let bossPhase = 0; // 0=normal, 1=enraged (below 50% hp)
+let isBossWave = false;
+let bossChargeTimer = 0;
+let bossSpecialTimer = 0;
 
 // ============================================================
 // 2. THREE.JS SETUP
@@ -873,7 +893,128 @@ function createTank(x, z, type) {
 }
 
 // ============================================================
-// 5. BULLET CREATION
+// 4b. BOSS TANK CREATION
+// ============================================================
+const BOSS_NAMES = ['IRONCLAD', 'DREADNOUGHT', 'LEVIA7HAN', 'JUGGERNAUT', 'TITAN'];
+
+function createBossTank(x, z) {
+  const id = nextEntityId++;
+  entities.add(id);
+  bossEntityId = id;
+
+  // Boss is 1.8x bigger, dark red/black
+  const scale = 1.8;
+  const bodyColor = 0x552222;
+  const turretColor = 0x441111;
+  const treadColor = 0x111111;
+
+  // Body
+  const bodyGeo = new THREE.BoxGeometry(1.6 * scale, 0.7 * scale, 2.4 * scale);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5, metalness: 0.4 });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.5 * scale;
+  body.castShadow = true;
+
+  // Angular armor plates (visual detail)
+  const plateGeo = new THREE.BoxGeometry(0.2, 0.3 * scale, 1.8 * scale);
+  const plateMat = new THREE.MeshStandardMaterial({ color: 0x663333, roughness: 0.4, metalness: 0.5 });
+  const plateL = new THREE.Mesh(plateGeo, plateMat);
+  plateL.position.set(-0.9 * scale, 0.4, 0);
+  body.add(plateL);
+  const plateR = new THREE.Mesh(plateGeo, plateMat);
+  plateR.position.set(0.9 * scale, 0.4, 0);
+  body.add(plateR);
+
+  // Turret group
+  const turretGroup = new THREE.Group();
+  turretGroup.position.y = 1.0 * scale;
+
+  const turretGeo = new THREE.CylinderGeometry(0.5 * scale, 0.65 * scale, 0.5 * scale, 8);
+  const turretMat = new THREE.MeshStandardMaterial({ color: turretColor, roughness: 0.4, metalness: 0.5 });
+  const turret = new THREE.Mesh(turretGeo, turretMat);
+  turretGroup.add(turret);
+
+  // Dual barrels
+  const barrelGeo = new THREE.CylinderGeometry(0.06 * scale, 0.08 * scale, 1.8 * scale, 6);
+  const barrelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.3, metalness: 0.7 });
+  const barrelL = new THREE.Mesh(barrelGeo, barrelMat);
+  barrelL.rotation.x = Math.PI / 2;
+  barrelL.position.set(-0.2 * scale, 0.1, 1.2 * scale);
+  turretGroup.add(barrelL);
+  const barrelR = new THREE.Mesh(barrelGeo, barrelMat);
+  barrelR.rotation.x = Math.PI / 2;
+  barrelR.position.set(0.2 * scale, 0.1, 1.2 * scale);
+  turretGroup.add(barrelR);
+
+  // Barrel tips
+  const tipGeo = new THREE.SphereGeometry(0.05);
+  const tipMat = new THREE.MeshBasicMaterial({ visible: false });
+  const tipL = new THREE.Mesh(tipGeo, tipMat);
+  tipL.position.set(-0.2 * scale, 0.1, 2.1 * scale);
+  turretGroup.add(tipL);
+  const tipR = new THREE.Mesh(tipGeo, tipMat);
+  tipR.position.set(0.2 * scale, 0.1, 2.1 * scale);
+  turretGroup.add(tipR);
+
+  // Treads
+  const treadGeo = new THREE.BoxGeometry(0.35 * scale, 0.4 * scale, 2.6 * scale);
+  const treadMat = new THREE.MeshStandardMaterial({ color: treadColor, roughness: 0.9, metalness: 0.1 });
+  const treadLM = new THREE.Mesh(treadGeo, treadMat);
+  treadLM.position.set(-1.0 * scale, 0.35 * scale, 0);
+  body.add(treadLM);
+  const treadRM = new THREE.Mesh(treadGeo, treadMat);
+  treadRM.position.set(1.0 * scale, 0.35 * scale, 0);
+  body.add(treadRM);
+
+  // Red glow
+  const glow = new THREE.PointLight(0xff2200, 0.6, 8);
+  glow.position.y = 0.5;
+  body.add(glow);
+
+  // Assemble
+  const group = new THREE.Group();
+  group.add(body);
+  group.add(turretGroup);
+  group.position.set(x, 0, z);
+  scene.add(group);
+
+  components.mesh.set(id, group);
+  components.turretMesh.set(id, turretGroup);
+  components.barrelTip.set(id, tipL); // primary barrel
+  components.transform.set(id, {
+    position: new THREE.Vector3(x, 0, z),
+    rotation: 0,
+    velocity: new THREE.Vector3(),
+    radius: 2.0
+  });
+
+  const bossHP = 200 + currentWave * 30;
+  components.health.set(id, { current: bossHP, max: bossHP });
+  components.tankControl.set(id, {
+    speed: 3.5,
+    reloadTime: 0.8,
+    lastFired: 0,
+    type: 'enemy'
+  });
+  components.enemyAI.set(id, {
+    state: 'chase',
+    targetPos: new THREE.Vector3(0, 0, 0),
+    patrolTimer: 0,
+    isBoss: true,
+    alternateBarrel: false
+  });
+
+  bossPhase = 0;
+  bossChargeTimer = 5;
+  bossSpecialTimer = 8;
+
+  // Boss name tag
+  document.getElementById('boss-name').textContent = BOSS_NAMES[Math.floor(Math.random() * BOSS_NAMES.length)];
+  document.getElementById('boss-name').classList.add('visible');
+  document.getElementById('boss-hp-bg').classList.add('visible');
+
+  return id;
+}
 // ============================================================
 function createBullet(position, direction, speed, damage, owner, color, radius, aoe) {
   const id = nextEntityId++;
@@ -1669,9 +1810,111 @@ function updateAI(dt) {
       }
     }
   });
+
+  // Boss-specific AI
+  if (bossEntityId && entities.has(bossEntityId)) {
+    updateBossAI(dt);
+  }
 }
 
-// --- Wall Collision ---
+function updateBossAI(dt) {
+  const tr = components.transform.get(bossEntityId);
+  const ctrl = components.tankControl.get(bossEntityId);
+  const health = components.health.get(bossEntityId);
+  const mesh = components.mesh.get(bossEntityId);
+  const turret = components.turretMesh.get(bossEntityId);
+  const ai = components.enemyAI.get(bossEntityId);
+  if (!tr || !ctrl || !health || !mesh || !ai) return;
+
+  const playerTr = components.transform.get(playerEntityId);
+  if (!playerTr) return;
+
+  // Boss HP bar
+  const hpPct = health.current / health.max * 100;
+  document.getElementById('boss-hp').style.width = hpPct + '%';
+
+  // Phase 2 at 50% HP — enrage
+  if (health.current < health.max * 0.5 && bossPhase === 0) {
+    bossPhase = 1;
+    ctrl.speed = 5.5;
+    ctrl.reloadTime = 0.4;
+    spawnExplosion(tr.position, 20, 0xff2200, 5, 0.5);
+    playSound('explosion');
+    // Flash red
+    mesh.traverse(child => {
+      if (child.isMesh && child.material && child.material.emissive) {
+        child.material.emissive.setHex(0x440000);
+      }
+    });
+  }
+
+  // Always chase player
+  const dx = playerTr.position.x - tr.position.x;
+  const dz = playerTr.position.z - tr.position.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+
+  if (dist > 5) {
+    const nx = dx / dist;
+    const nz = dz / dist;
+    tr.position.x += nx * ctrl.speed * dt;
+    tr.position.z += nz * ctrl.speed * dt;
+
+    const targetRot = Math.atan2(nx, nz);
+    let diff = targetRot - tr.rotation;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    tr.rotation += diff * Math.min(1, dt * 4);
+  }
+
+  resolveWallCollisions(bossEntityId, tr);
+  resolveTankCollisions(bossEntityId, tr);
+  tr.position.x = Math.max(-HALF_MAP + 2.5, Math.min(HALF_MAP - 2.5, tr.position.x));
+  tr.position.z = Math.max(-HALF_MAP + 2.5, Math.min(HALF_MAP - 2.5, tr.position.z));
+  mesh.position.set(tr.position.x, 0, tr.position.z);
+  mesh.rotation.y = tr.rotation;
+
+  // Turret aim
+  if (turret) {
+    const aimDx = playerTr.position.x - tr.position.x;
+    const aimDz = playerTr.position.z - tr.position.z;
+    turret.rotation.y = Math.atan2(aimDx, aimDz) - tr.rotation;
+  }
+
+  // Regular fire (dual barrels alternating)
+  ctrl.lastFired += dt;
+  if (dist < 30 && ctrl.lastFired >= ctrl.reloadTime) {
+    // Fire from alternating barrels
+    const tipKey = ai.alternateBarrel ? 'barrelTip' : 'barrelTip';
+    // Just use main fire — the boss barrel already set up
+    fireBullet(bossEntityId);
+    ctrl.lastFired = 0;
+    ai.alternateBarrel = !ai.alternateBarrel;
+  }
+
+  // Special attack: charge toward player
+  bossChargeTimer -= dt;
+  if (bossChargeTimer <= 0 && dist > 8) {
+    ctrl.speed = bossPhase === 1 ? 12 : 9;
+    setTimeout(() => {
+      if (components.tankControl.has(bossEntityId)) {
+        components.tankControl.get(bossEntityId).speed = bossPhase === 1 ? 5.5 : 3.5;
+      }
+    }, 1500);
+    bossChargeTimer = bossPhase === 1 ? 6 : 8;
+    spawnDustTrail(tr.position);
+  }
+
+  // Special attack: burst fire (3 shots rapid)
+  bossSpecialTimer -= dt;
+  if (bossSpecialTimer <= 0) {
+    for (let i = 0; i < 3; i++) {
+      setTimeout(() => {
+        if (entities.has(bossEntityId)) fireBullet(bossEntityId);
+      }, i * 150);
+    }
+    bossSpecialTimer = bossPhase === 1 ? 5 : 7;
+  }
+}
 function resolveWallCollisions(entityId, tr) {
   const checkRadius = 1.2;
   const gx = Math.round(tr.position.x + HALF_MAP);
@@ -1824,15 +2067,23 @@ function updateCombat(dt) {
           if (health.current <= 0) {
             // Destroy tank
             if (otherCtrl && otherCtrl.type === 'enemy') {
-              score += 100;
-              scrap += 10 + currentWave * 2;
+              const isBoss = otherId === bossEntityId;
+              score += isBoss ? 500 : 100;
+              scrap += isBoss ? (50 + currentWave * 10) : (10 + currentWave * 2);
               waveEnemiesAlive--;
               killStreak++;
               showKillStreak(killStreak);
-              spawnExplosion(otherTr.position, 25, 0xff6622, 6, 1.0);
-              spawnExplosion(otherTr.position, 25, 0xff6622, 6, 1.0);
-              spawnExplosion(otherTr.position, 10, 0x333333, 4, 1.5);
+              spawnExplosion(otherTr.position, isBoss ? 50 : 25, isBoss ? 0xff2200 : 0xff6622, isBoss ? 10 : 6, 1.0);
+              spawnExplosion(otherTr.position, isBoss ? 30 : 10, 0x333333, isBoss ? 6 : 4, 1.5);
               playSound('explosion');
+              if (isBoss) {
+                // Boss destroyed — massive explosion, hide boss HUD
+                spawnExplosion(otherTr.position, 40, 0xffaa00, 8, 1.2);
+                playSound('barrelExplode');
+                bossEntityId = null;
+                document.getElementById('boss-hp-bg').classList.remove('visible');
+                document.getElementById('boss-name').classList.remove('visible');
+              }
               toDestroy.push(otherId);
             } else if (otherId === playerEntityId) {
               // Player died
@@ -1957,9 +2208,10 @@ function updateWaves(dt) {
 }
 
 function spawnWave(wave) {
-  const enemyCount = 3 + (wave - 1) * 2;
-  waveEnemiesAlive = enemyCount;
-  waveEnemyTotal = enemyCount;
+  isBossWave = wave > 1 && wave % 5 === 0;
+  const enemyCount = isBossWave ? Math.max(2, Math.floor((3 + (wave - 1) * 2) * 0.4)) : (3 + (wave - 1) * 2);
+  waveEnemiesAlive = enemyCount + (isBossWave ? 1 : 0);
+  waveEnemyTotal = waveEnemiesAlive;
 
   for (let i = 0; i < enemyCount; i++) {
     // Spawn on map edges, away from player
@@ -1972,6 +2224,16 @@ function spawnWave(wave) {
       case 3: z = HALF_MAP - 3; x = (Math.random() - 0.5) * (MAP_SIZE - 10); break;
     }
     createTank(x, z, 'enemy');
+  }
+  // Spawn boss
+  if (isBossWave) {
+    const bx = (Math.random() - 0.5) * 20;
+    const bz = (Math.random() > 0.5 ? -1 : 1) * (HALF_MAP - 5);
+    createBossTank(bx, bz);
+    // Boss warning
+    const warn = document.getElementById('boss-warning');
+    warn.classList.add('visible');
+    setTimeout(() => warn.classList.remove('visible'), 2500);
   }
   waveSpawned = true;
 }
@@ -2304,6 +2566,11 @@ function restartGame() {
   Object.keys(upgrades).forEach(k => upgrades[k].level = 0);
   currentWeather = 'clear';
   currentBattlefield = 'default';
+  bossEntityId = null;
+  isBossWave = false;
+  bossPhase = 0;
+  document.getElementById('boss-hp-bg').classList.remove('visible');
+  document.getElementById('boss-name').classList.remove('visible');
   clearWeatherParticles();
   stopRainSound();
   const clearEffect = WEATHER_EFFECTS.clear;
