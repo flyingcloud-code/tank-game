@@ -40,6 +40,40 @@
   #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #fff; }
   #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
   #crosshair::after { height: 2px; width: 100%; top: 50%; transform: translateY(-50%); }
+
+  /* Minimap */
+  #minimap { position: fixed; bottom: 20px; left: 20px; width: 160px; height: 160px; background: rgba(0,0,0,0.5); border: 1px solid #555; border-radius: 4px; z-index: 10; pointer-events: none; }
+
+  /* Kill streak */
+  #kill-streak { position: fixed; top: 50%; right: 30px; transform: translateY(-50%); color: #ff8800; font-size: 28px; font-weight: bold; text-shadow: 0 0 15px rgba(255,136,0,0.6); z-index: 15; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
+  #kill-streak.visible { opacity: 1; }
+
+  /* Wave progress */
+  #wave-progress-bg { position: fixed; top: 0; left: 0; right: 0; height: 3px; background: rgba(0,0,0,0.3); z-index: 12; pointer-events: none; }
+  #wave-progress { height: 100%; background: #ff8800; transition: width 0.3s; width: 0%; }
+
+  /* Damage numbers */
+  .dmg-number { position: fixed; color: #ffcc00; font-size: 18px; font-weight: bold; text-shadow: 0 1px 3px rgba(0,0,0,0.8); z-index: 16; pointer-events: none; animation: dmgFloat 0.8s ease-out forwards; }
+  .dmg-number.crit { color: #ff4444; font-size: 24px; }
+  @keyframes dmgFloat { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-40px); } }
+
+  /* Enemies remaining */
+  #enemies-display { color: #aaa; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+  /* Weapon selector */
+  #weapon-bar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; z-index: 15; pointer-events: none; }
+  .weapon-slot { width: 50px; height: 50px; background: rgba(0,0,0,0.5); border: 2px solid #555; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: all 0.2s; }
+  .weapon-slot.active { border-color: #ff8800; background: rgba(255,136,0,0.15); }
+  .weapon-slot .weapon-key { color: #888; font-size: 10px; }
+  .weapon-slot.active .weapon-key { color: #ff8800; }
+  .weapon-slot .weapon-icon { font-size: 18px; }
+  .weapon-slot .weapon-name { color: #ccc; font-size: 8px; margin-top: 1px; }
+  .weapon-slot.active .weapon-name { color: #fff; }
+
+  /* Power-up indicators */
+  #powerup-bar { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; z-index: 15; pointer-events: none; }
+  .powerup-icon { width: 32px; height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 16px; background: rgba(0,0,0,0.5); border: 1px solid; position: relative; }
+  .powerup-icon .pu-timer { position: absolute; bottom: -2px; left: 0; right: 0; height: 3px; border-radius: 1px; }
 </style>
 </head>
 <body>
@@ -58,6 +92,7 @@
       <span class="hud-label">Wave</span><br>
       <span class="hud-value" id="wave-text">1</span>
     </div>
+    <div id="enemies-display">Enemies: 0</div>
   </div>
 </div>
 
@@ -70,6 +105,16 @@
   <button id="restart-btn">RESTART</button>
 </div>
 <div id="crosshair"></div>
+<canvas id="minimap" width="160" height="160"></canvas>
+<div id="kill-streak"></div>
+<div id="wave-progress-bg"><div id="wave-progress"></div></div>
+<div id="dmg-numbers"></div>
+<div id="weapon-bar">
+  <div class="weapon-slot active" id="weapon-0"><span class="weapon-key">1</span><span class="weapon-icon">🎯</span><span class="weapon-name">Cannon</span></div>
+  <div class="weapon-slot" id="weapon-1"><span class="weapon-key">2</span><span class="weapon-icon">⚡</span><span class="weapon-name">MG</span></div>
+  <div class="weapon-slot" id="weapon-2"><span class="weapon-key">3</span><span class="weapon-icon">💥</span><span class="weapon-name">Rocket</span></div>
+</div>
+<div id="powerup-bar"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -94,6 +139,20 @@ const BARREL_EXPLOSION_DAMAGE = 40;
 const BARREL_EXPLOSION_RADIUS = 5;
 const MAX_PARTICLES = 200;
 
+// Weapon definitions
+const WEAPONS = [
+  { name: 'Cannon',     speed: 28, damage: 25, reload: 0.5,  color: 0xffcc44, radius: 0.10, aoe: 0 },
+  { name: 'MG',         speed: 35, damage: 6,  reload: 0.08, color: 0xffffaa, radius: 0.05, aoe: 0 },
+  { name: 'Rocket',     speed: 18, damage: 60, reload: 1.8,  color: 0xff4400, radius: 0.15, aoe: 4 },
+];
+let currentWeapon = 0;
+
+// Power-up definitions & state
+const POWERUP_TYPES = ['health', 'shield', 'speed', 'rapidfire'];
+const POWERUP_DURATION = 8; // seconds for temporary buffs
+const activePowerups = { shield: 0, speed: 0, rapidfire: 0 };
+const powerupEntities = new Set();
+
 // ============================================================
 // 2. THREE.JS SETUP
 // ============================================================
@@ -107,6 +166,12 @@ let waveTimer = 0;
 let waveEnemiesAlive = 0;
 let waveSpawned = false;
 let clock = new THREE.Clock();
+let killStreak = 0;
+let killStreakTimer = 0;
+let waveEnemyTotal = 0;
+let isPlayerMoving = false;
+let engineOsc = null, engineGain = null;
+let ambienceStarted = false;
 
 // ECS storage
 const entities = new Set();
@@ -235,7 +300,6 @@ function playSound(type) {
       }
       case 'barrelExplode': {
         playSound('explosion');
-        // Extra metallic ring
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
@@ -248,8 +312,127 @@ function playSound(type) {
         osc.stop(now + 0.4);
         break;
       }
+      case 'powerup': {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(800, now + 0.15);
+        g.gain.setValueAtTime(0.15, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.connect(g).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.2);
+        break;
+      }
+      case 'rocketExplode': {
+        playSound('explosion');
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(60, now);
+        osc.frequency.exponentialRampToValueAtTime(10, now + 0.8);
+        g.gain.setValueAtTime(0.3, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+        osc.connect(g).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.8);
+        break;
+      }
     }
   } catch(e) {} // Silently fail if audio blocked
+}
+
+function startEngineSound() {
+  try {
+    const ctx = getAudioCtx();
+    if (engineOsc) return;
+    engineOsc = ctx.createOscillator();
+    engineGain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 120;
+    engineOsc.type = 'sawtooth';
+    engineOsc.frequency.value = 35;
+    engineGain.gain.value = 0;
+    engineOsc.connect(filter).connect(engineGain).connect(ctx.destination);
+    engineOsc.start();
+  } catch(e) {}
+}
+
+function updateEngineSound(moving) {
+  if (!engineOsc || !engineGain) return;
+  const ctx = getAudioCtx();
+  const targetFreq = moving ? 55 : 35;
+  const targetGain = moving ? 0.04 : 0.01;
+  engineOsc.frequency.setTargetAtTime(targetFreq, ctx.currentTime, 0.1);
+  engineGain.gain.setTargetAtTime(targetGain, ctx.currentTime, 0.1);
+}
+
+function startAmbience() {
+  if (ambienceStarted) return;
+  ambienceStarted = true;
+  try {
+    const ctx = getAudioCtx();
+    // Low rumble loop
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let v = 0;
+    for (let i = 0; i < data.length; i++) {
+      v += (Math.random() * 2 - 1) * 0.02;
+      v *= 0.998;
+      data[i] = v;
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 80;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.08;
+    noise.connect(filter).connect(gain).connect(ctx.destination);
+    noise.start();
+
+    // Distant artillery (random booms every 5-15s)
+    setInterval(() => {
+      if (gameState === 'playing') {
+        try {
+          const now = ctx.currentTime;
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = 'sawtooth';
+          const baseFreq = 20 + Math.random() * 20;
+          osc.frequency.setValueAtTime(baseFreq, now);
+          osc.frequency.exponentialRampToValueAtTime(10, now + 0.8);
+          g.gain.setValueAtTime(0.03, now);
+          g.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+          osc.connect(g).connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.8);
+        } catch(e) {}
+      }
+    }, 5000 + Math.random() * 10000);
+  } catch(e) {}
+}
+
+function playTreadSound() {
+  try {
+    const ctx = getAudioCtx();
+    const now = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.05, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.max(0, 1 - i / data.length) * 0.15;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.06, now);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 300;
+    noise.connect(filter).connect(ng).connect(ctx.destination);
+    noise.start(now);
+  } catch(e) {}
 }
 
 function init() {
@@ -301,10 +484,15 @@ function init() {
   playerEntityId = createTank(0, 0, 'player');
 
   // Input
-  window.addEventListener('keydown', e => keys[e.code] = true);
+  window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Digit1') switchWeapon(0);
+    if (e.code === 'Digit2') switchWeapon(1);
+    if (e.code === 'Digit3') switchWeapon(2);
+  });
   window.addEventListener('keyup', e => keys[e.code] = false);
   window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mousedown', () => mouse.down = true);
+  window.addEventListener('mousedown', () => { mouse.down = true; startEngineSound(); startAmbience(); });
   window.addEventListener('mouseup', () => mouse.down = false);
   window.addEventListener('resize', onResize);
   document.getElementById('restart-btn').addEventListener('click', restartGame);
@@ -573,18 +761,18 @@ function createTank(x, z, type) {
 // ============================================================
 // 5. BULLET CREATION
 // ============================================================
-function createBullet(position, direction, speed, damage, owner) {
+function createBullet(position, direction, speed, damage, owner, color, radius, aoe) {
   const id = nextEntityId++;
   entities.add(id);
 
-  const geo = new THREE.SphereGeometry(0.1, 6, 6);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffcc44 });
+  const geo = new THREE.SphereGeometry(radius || 0.1, 6, 6);
+  const mat = new THREE.MeshBasicMaterial({ color: color || 0xffcc44 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(position);
   scene.add(mesh);
 
   // Trail light
-  const light = new THREE.PointLight(0xffaa22, 0.5, 5);
+  const light = new THREE.PointLight(color || 0xffaa22, 0.5, 5);
   mesh.add(light);
 
   components.mesh.set(id, mesh);
@@ -592,17 +780,143 @@ function createBullet(position, direction, speed, damage, owner) {
     position: position.clone(),
     rotation: 0,
     velocity: new THREE.Vector3(),
-    radius: 0.1
+    radius: radius || 0.1
   });
   components.bullet.set(id, {
     direction: direction.clone().normalize(),
     speed,
     damage,
     owner,
-    lifetime: 3
+    lifetime: 3,
+    aoe: aoe || 0
   });
 
   return id;
+}
+
+// ============================================================
+// 5b. POWER-UPS
+// ============================================================
+const POWERUP_COLORS = { health: 0x44ff44, shield: 0x4488ff, speed: 0xffaa00, rapidfire: 0xff44ff };
+
+function spawnPowerup(x, z) {
+  const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+  const id = nextEntityId++;
+  entities.add(id);
+  powerupEntities.add(id);
+
+  const color = POWERUP_COLORS[type];
+  const group = new THREE.Group();
+
+  // Base ring
+  const ringGeo = new THREE.TorusGeometry(0.5, 0.1, 6, 12);
+  const ringMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3, roughness: 0.3, metalness: 0.5 });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  group.add(ring);
+
+  // Icon sphere
+  const sphereGeo = new THREE.OctahedronGeometry(0.25);
+  const sphereMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5 });
+  const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+  sphere.position.y = 0.6;
+  group.add(sphere);
+
+  // Point light
+  const light = new THREE.PointLight(color, 0.5, 5);
+  light.position.y = 0.5;
+  group.add(light);
+
+  group.position.set(x, 0.3, z);
+  scene.add(group);
+
+  components.mesh.set(id, group);
+  components.transform.set(id, { position: new THREE.Vector3(x, 0.3, z), rotation: 0, velocity: new THREE.Vector3(), radius: 0.8 });
+  // Store powerup type as a custom component
+  components.destructible.set(id, { type: 'powerup', powerupType: type });
+
+  return id;
+}
+
+function updatePowerups(dt) {
+  // Rotate and bob powerups
+  powerupEntities.forEach(id => {
+    const mesh = components.mesh.get(id);
+    if (mesh) {
+      mesh.rotation.y += dt * 2;
+      mesh.position.y = 0.3 + Math.sin(Date.now() * 0.003) * 0.15;
+    }
+  });
+
+  // Check player collection
+  if (!playerEntityId || !components.transform.has(playerEntityId)) return;
+  const playerTr = components.transform.get(playerEntityId);
+
+  powerupEntities.forEach(id => {
+    const puTr = components.transform.get(id);
+    if (!puTr) return;
+    const dist = playerTr.position.distanceTo(puTr.position);
+    if (dist < 1.5) {
+      const pu = components.destructible.get(id);
+      if (pu && pu.type === 'powerup') {
+        applyPowerup(pu.powerupType);
+        powerupEntities.delete(id);
+        destroyEntity(id);
+        playSound('powerup');
+      }
+    }
+  });
+
+  // Tick down temporary buffs
+  for (const key of ['shield', 'speed', 'rapidfire']) {
+    if (activePowerups[key] > 0) {
+      activePowerups[key] -= dt;
+      if (activePowerups[key] <= 0) activePowerups[key] = 0;
+    }
+  }
+}
+
+function applyPowerup(type) {
+  switch(type) {
+    case 'health': {
+      const h = components.health.get(playerEntityId);
+      if (h) h.current = Math.min(h.max, h.current + 40);
+      break;
+    }
+    case 'shield': activePowerups.shield = POWERUP_DURATION; break;
+    case 'speed': activePowerups.speed = POWERUP_DURATION; break;
+    case 'rapidfire': activePowerups.rapidfire = POWERUP_DURATION; break;
+  }
+}
+
+function addPowerupSound() {
+  try {
+    const ctx = getAudioCtx();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(400, now);
+    osc.frequency.exponentialRampToValueAtTime(800, now + 0.15);
+    g.gain.setValueAtTime(0.15, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.2);
+  } catch(e) {}
+}
+
+// Spawn powerups when wave starts
+function spawnWavePowerups() {
+  // 2-3 powerups per wave
+  const count = 2 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < count; i++) {
+    const x = (Math.random() - 0.5) * (MAP_SIZE - 10);
+    const z = (Math.random() - 0.5) * (MAP_SIZE - 10);
+    // Don't spawn too close to center or walls
+    if (Math.abs(x) < 3 && Math.abs(z) < 3) continue;
+    spawnPowerup(x, z);
+  }
 }
 
 // ============================================================
@@ -706,6 +1020,90 @@ function updateParticles(dt) {
 // ============================================================
 // 7. INPUT
 // ============================================================
+
+// Damage numbers
+function spawnDamageNumber(worldPos, damage, isCrit) {
+  const vec = worldPos.clone();
+  vec.y = 1;
+  vec.project(camera);
+  const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-vec.y * 0.5 + 0.5) * window.innerHeight;
+
+  const el = document.createElement('div');
+  el.className = 'dmg-number' + (isCrit ? ' crit' : '');
+  el.textContent = '-' + damage;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+  document.getElementById('dmg-numbers').appendChild(el);
+  setTimeout(() => el.remove(), 800);
+}
+
+// Kill streak display
+function showKillStreak(count) {
+  if (count < 2) return;
+  const el = document.getElementById('kill-streak');
+  const labels = ['', '', 'DOUBLE KILL', 'TRIPLE KILL', 'QUAD KILL', 'PENTA KILL'];
+  el.textContent = count < labels.length ? labels[count] : count + 'x KILL STREAK';
+  el.classList.add('visible');
+  killStreakTimer = 2;
+}
+
+// Minimap drawing
+function drawMinimap() {
+  const canvas = document.getElementById('minimap');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const scale = w / MAP_SIZE;
+
+  ctx.fillStyle = 'rgba(30,30,20,0.8)';
+  ctx.fillRect(0, 0, w, h);
+
+  // Walls
+  components.destructible.forEach((d, id) => {
+    const tr = components.transform.get(id);
+    if (!tr) return;
+    const mx = (tr.position.x + HALF_MAP) * scale;
+    const mz = (tr.position.z + HALF_MAP) * scale;
+    if (d.type === 'concrete') {
+      ctx.fillStyle = '#666';
+    } else if (d.type === 'wall') {
+      ctx.fillStyle = '#8a6a4a';
+    } else {
+      ctx.fillStyle = '#cc3322';
+    }
+    ctx.fillRect(mx - 1, mz - 1, 2, 2);
+  });
+
+  // Enemies
+  components.enemyAI.forEach((ai, id) => {
+    const tr = components.transform.get(id);
+    if (!tr) return;
+    const mx = (tr.position.x + HALF_MAP) * scale;
+    const mz = (tr.position.z + HALF_MAP) * scale;
+    ctx.fillStyle = '#ff6644';
+    ctx.beginPath();
+    ctx.arc(mx, mz, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Player
+  if (playerEntityId && components.transform.has(playerEntityId)) {
+    const pTr = components.transform.get(playerEntityId);
+    const mx = (pTr.position.x + HALF_MAP) * scale;
+    const mz = (pTr.position.z + HALF_MAP) * scale;
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.arc(mx, mz, 3, 0, Math.PI * 2);
+    ctx.fill();
+    // Direction indicator
+    ctx.strokeStyle = '#44ff44';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(mx, mz);
+    ctx.lineTo(mx + Math.sin(pTr.rotation) * 6, mz + Math.cos(pTr.rotation) * 6);
+    ctx.stroke();
+  }
+}
 function onMouseMove(e) {
   mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -720,6 +1118,18 @@ function onResize() {
 // ============================================================
 // 8. SYSTEMS
 // ============================================================
+
+// --- Weapon Switch ---
+function switchWeapon(idx) {
+  if (idx === currentWeapon) return;
+  currentWeapon = idx;
+  document.querySelectorAll('.weapon-slot').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+  // Reset reload
+  const ctrl = components.tankControl.get(playerEntityId);
+  if (ctrl) ctrl.lastFired = 0;
+}
 
 // --- Player System ---
 function updatePlayer(dt) {
@@ -737,11 +1147,13 @@ function updatePlayer(dt) {
   if (keys['KeyD'] || keys['ArrowRight']) moveX += 1;
 
   if (moveX !== 0 || moveZ !== 0) {
+    isPlayerMoving = true;
     const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
     moveX /= len;
     moveZ /= len;
-    tr.position.x += moveX * ctrl.speed * dt;
-    tr.position.z += moveZ * ctrl.speed * dt;
+    const speedMult = activePowerups.speed > 0 ? 1.6 : 1;
+    tr.position.x += moveX * ctrl.speed * speedMult * dt;
+    tr.position.z += moveZ * ctrl.speed * speedMult * dt;
 
     // Rotate body toward movement direction
     const targetRot = Math.atan2(moveX, moveZ);
@@ -752,6 +1164,10 @@ function updatePlayer(dt) {
 
     // Dust trail
     if (Math.random() < 0.3) spawnDustTrail(tr.position);
+    // Tread sound
+    if (Math.random() < 0.08) playTreadSound();
+  } else {
+    isPlayerMoving = false;
   }
 
   // Collision with walls
@@ -784,8 +1200,11 @@ function updatePlayer(dt) {
   }
 
   // Fire
+  const w = WEAPONS[currentWeapon];
+  const rapidMult = activePowerups.rapidfire > 0 ? 0.4 : 1;
+  const reloadTime = w.reload * rapidMult;
   ctrl.lastFired += dt;
-  if (mouse.down && ctrl.lastFired >= ctrl.reloadTime) {
+  if (mouse.down && ctrl.lastFired >= reloadTime) {
     fireBullet(playerEntityId);
     ctrl.lastFired = 0;
   }
@@ -809,7 +1228,29 @@ function fireBullet(tankId) {
   const worldAngle = bodyRot + turretLocal;
   const direction = new THREE.Vector3(Math.sin(worldAngle), 0, Math.cos(worldAngle));
 
-  createBullet(tipWorld, direction, ctrl.type === 'player' ? PLAYER_BULLET_SPEED : ENEMY_BULLET_SPEED, ctrl.type === 'player' ? PLAYER_BULLET_DAMAGE : ENEMY_BULLET_DAMAGE, tankId);
+  const isPlayer = ctrl.type === 'player';
+  let speed, damage, bulletColor, bulletRadius, aoe, reloadTime, soundType;
+
+  if (isPlayer) {
+    const w = WEAPONS[currentWeapon];
+    const rapidMult = activePowerups.rapidfire > 0 ? 0.4 : 1;
+    reloadTime = w.reload * rapidMult;
+    speed = w.speed;
+    damage = w.damage;
+    bulletColor = w.color;
+    bulletRadius = w.radius;
+    aoe = w.aoe;
+    soundType = currentWeapon === 2 ? 'rocketExplode' : 'fire';
+  } else {
+    speed = ENEMY_BULLET_SPEED;
+    damage = ENEMY_BULLET_DAMAGE;
+    bulletColor = 0xffcc44;
+    bulletRadius = 0.10;
+    aoe = 0;
+    soundType = 'fire';
+  }
+
+  createBullet(tipWorld, direction, speed, damage, tankId, bulletColor, bulletRadius, aoe);
   spawnMuzzleFlash(tipWorld);
   playSound('fire');
 }
@@ -1048,13 +1489,29 @@ function updateCombat(dt) {
         const health = components.health.get(otherId);
         const destructible = components.destructible.get(otherId);
         if (health) {
-          health.current -= bullet.damage;
+          let dmg = bullet.damage;
+          // Shield reduces damage to player
+          if (otherId === playerEntityId && activePowerups.shield > 0) {
+            dmg = Math.round(dmg * 0.3);
+          }
+          health.current -= dmg;
           playSound('tankHit');
+          spawnDamageNumber(otherTr.position, dmg, dmg >= 50);
+
+          // AoE on impact (rocket)
+          if (bullet.aoe > 0) {
+            applyAreaDamage(otherTr.position, bullet.aoe, bullet.damage * 0.5, bullet.owner);
+            spawnExplosion(otherTr.position, 30, 0xff4400, 7, 0.8);
+            playSound('rocketExplode');
+          }
           if (health.current <= 0) {
             // Destroy tank
             if (otherCtrl && otherCtrl.type === 'enemy') {
               score += 100;
               waveEnemiesAlive--;
+              killStreak++;
+              showKillStreak(killStreak);
+              spawnExplosion(otherTr.position, 25, 0xff6622, 6, 1.0);
               spawnExplosion(otherTr.position, 25, 0xff6622, 6, 1.0);
               spawnExplosion(otherTr.position, 10, 0x333333, 4, 1.5);
               playSound('explosion');
@@ -1172,6 +1629,7 @@ function updateWaves(dt) {
     // Wave complete
     score += currentWave * 50;
     waveSpawned = false;
+    killStreak = 0;
     currentWave++;
     waveTimer = 3; // 3 second pause
   }
@@ -1181,6 +1639,7 @@ function updateWaves(dt) {
     if (waveTimer <= 0) {
       announceWave(currentWave);
       spawnWave(currentWave);
+      spawnWavePowerups();
     }
   }
 }
@@ -1188,6 +1647,7 @@ function updateWaves(dt) {
 function spawnWave(wave) {
   const enemyCount = 3 + (wave - 1) * 2;
   waveEnemiesAlive = enemyCount;
+  waveEnemyTotal = enemyCount;
 
   for (let i = 0; i < enemyCount; i++) {
     // Spawn on map edges, away from player
@@ -1236,6 +1696,7 @@ function updateCamera(dt) {
 }
 
 // --- HUD Update ---
+let minimapCounter = 0;
 function updateHUD() {
   const health = components.health.get(playerEntityId);
   if (health) {
@@ -1248,6 +1709,73 @@ function updateHUD() {
   }
   document.getElementById('score-text').textContent = score;
   document.getElementById('wave-text').textContent = currentWave;
+  document.getElementById('enemies-display').textContent = 'Enemies: ' + waveEnemiesAlive;
+
+  // Wave progress bar
+  if (waveEnemyTotal > 0) {
+    const killed = waveEnemyTotal - waveEnemiesAlive;
+    document.getElementById('wave-progress').style.width = (killed / waveEnemyTotal * 100) + '%';
+  }
+
+  // Kill streak timer
+  if (killStreakTimer > 0) {
+    killStreakTimer -= 0.016;
+    if (killStreakTimer <= 0) {
+      document.getElementById('kill-streak').classList.remove('visible');
+      killStreak = 0;
+    }
+  }
+
+  // Engine sound
+  updateEngineSound(isPlayerMoving);
+
+  // Minimap (update every 3 frames for perf)
+  minimapCounter++;
+  if (minimapCounter % 3 === 0) drawMinimap();
+
+  // Power-up indicators
+  updatePowerupHUD();
+}
+
+function updatePowerupHUD() {
+  const puBar = document.getElementById('powerup-bar');
+  const existing = puBar.children.length;
+  const needed = (activePowerups.shield > 0 ? 1 : 0) + (activePowerups.speed > 0 ? 1 : 0) + (activePowerups.rapidfire > 0 ? 1 : 0);
+
+  // Rebuild only if count changed
+  if (existing !== needed) {
+    while (puBar.firstChild) puBar.removeChild(puBar.firstChild);
+
+    const pups = [
+      { key: 'shield', icon: '\u{1F6E1}', color: '#4488ff' },
+      { key: 'speed', icon: '\u26A1', color: '#ffaa00' },
+      { key: 'rapidfire', icon: '\uD83D\uDD25', color: '#ff44ff' },
+    ];
+    pups.forEach(p => {
+      if (activePowerups[p.key] <= 0) return;
+      const div = document.createElement('div');
+      div.className = 'powerup-icon';
+      div.style.borderColor = p.color;
+      div.dataset.powerup = p.key;
+      const span = document.createElement('span');
+      span.textContent = p.icon;
+      div.appendChild(span);
+      const timer = document.createElement('div');
+      timer.className = 'pu-timer';
+      timer.style.background = p.color;
+      div.appendChild(timer);
+      puBar.appendChild(div);
+    });
+  }
+
+  // Update timer widths
+  puBar.querySelectorAll('.powerup-icon').forEach(el => {
+    const key = el.dataset.powerup;
+    if (key && activePowerups[key] !== undefined) {
+      const timer = el.querySelector('.pu-timer');
+      if (timer) timer.style.width = (activePowerups[key] / POWERUP_DURATION * 100) + '%';
+    }
+  });
 }
 
 // ============================================================
@@ -1289,6 +1817,15 @@ function restartGame() {
   waveTimer = 0;
   waveEnemiesAlive = 0;
   waveSpawned = false;
+  waveEnemyTotal = 0;
+  killStreak = 0;
+  killStreakTimer = 0;
+  waveEnemyTotal = 0;
+  activePowerups.shield = 0;
+  activePowerups.speed = 0;
+  activePowerups.rapidfire = 0;
+  powerupEntities.clear();
+  currentWeapon = 0;
   gameState = 'playing';
   nextEntityId = 1;
 
@@ -1321,6 +1858,7 @@ function animate() {
   updatePlayer(dt);
   updateAI(dt);
   updateCombat(dt);
+  updatePowerups(dt);
   updateWaves(dt);
   updateCamera(dt);
   updateParticles(dt);
