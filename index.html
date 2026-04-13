@@ -97,6 +97,11 @@
   /* Weather */
   #weather-indicator { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); color: #ccc; font-size: 12px; z-index: 12; pointer-events: none; text-transform: uppercase; letter-spacing: 2px; opacity: 0; transition: opacity 0.5s; }
   #weather-indicator.visible { opacity: 0.7; }
+
+  /* Map transition */
+  #map-announce { position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 20px; font-weight: bold; text-shadow: 0 0 15px rgba(0,0,0,0.8); opacity: 0; z-index: 22; pointer-events: none; transition: opacity 0.5s; letter-spacing: 3px; }
+  #map-announce.visible { opacity: 1; }
+  #map-announce .map-name { font-size: 36px; display: block; margin-top: 5px; color: #ff8800; }
 </style>
 </head>
 <body>
@@ -133,6 +138,7 @@
 <div id="wave-progress-bg"><div id="wave-progress"></div></div>
 <div id="dmg-numbers"></div>
 <div id="weather-indicator"></div>
+<div id="map-announce"><span class="map-subtitle">ENTERING</span><span class="map-name" id="map-name-text"></span></div>
 <div id="weapon-bar">
   <div class="weapon-slot active" id="weapon-0"><span class="weapon-key">1</span><span class="weapon-icon">🎯</span><span class="weapon-name">Cannon</span></div>
   <div class="weapon-slot" id="weapon-1"><span class="weapon-key">2</span><span class="weapon-icon">⚡</span><span class="weapon-name">MG</span></div>
@@ -204,6 +210,72 @@ let weatherTimer = 0;
 let weatherParticles = [];
 let rainAudioNode = null;
 let rainGainNode = null;
+
+// Battlefields
+const BATTLEFIELDS = {
+  default: {
+    name: 'Training Grounds',
+    groundColor: 0x8b7d5e, skyColor: 0x87919a, fogColor: 0x87919a, fogNear: 80, fogFar: 120,
+    wallColor: 0x8b6b4a, concreteColor: 0x666660, ambientColor: 0x888899, sunColor: 0xffeedd,
+    walls: [
+      { x: 0, z: 0, w: 3, d: 1 }, { x: 0, z: 0, w: 1, d: 3 },
+      { x: -12, z: -12, w: 4, d: 1 }, { x: -12, z: -10, w: 1, d: 3 },
+      { x: 12, z: -12, w: 4, d: 1 }, { x: 13, z: -10, w: 1, d: 3 },
+      { x: -12, z: 12, w: 4, d: 1 }, { x: -12, z: 10, w: 1, d: 3 },
+      { x: 12, z: 12, w: 4, d: 1 }, { x: 13, z: 10, w: 1, d: 3 },
+      { x: -6, z: 0, w: 1, d: 5 }, { x: 6, z: 0, w: 1, d: 5 },
+      { x: 0, z: -8, w: 5, d: 1 }, { x: 0, z: 8, w: 5, d: 1 },
+      { x: -18, z: -4, w: 2, d: 1 }, { x: 18, z: 4, w: 2, d: 1 },
+      { x: -4, z: -18, w: 1, d: 2 }, { x: 4, z: 18, w: 1, d: 2 },
+    ],
+    barrels: [[-8,-6],[8,-6],[-8,6],[8,6],[-3,-15],[3,-15],[-3,15],[3,15],[-15,-3],[15,-3],[-15,3],[15,3],[0,-4],[0,4]],
+  },
+  desert: {
+    name: 'Sahara Outpost',
+    groundColor: 0xc4a868, skyColor: 0xd4b878, fogColor: 0xd4b878, fogNear: 50, fogFar: 90,
+    wallColor: 0xb89a5a, concreteColor: 0x8a7a5a, ambientColor: 0xaa9977, sunColor: 0xffddaa,
+    walls: [
+      { x: 0, z: -5, w: 7, d: 1 }, { x: 0, z: 5, w: 7, d: 1 },
+      { x: -10, z: 0, w: 1, d: 8 }, { x: 10, z: 0, w: 1, d: 8 },
+      { x: -18, z: -12, w: 6, d: 1 }, { x: 18, z: -12, w: 6, d: 1 },
+      { x: -18, z: 12, w: 6, d: 1 }, { x: 18, z: 12, w: 6, d: 1 },
+      { x: -5, z: -16, w: 2, d: 3 }, { x: 5, z: 16, w: 2, d: 3 },
+      { x: -15, z: -5, w: 1, d: 4 }, { x: 15, z: 5, w: 1, d: 4 },
+    ],
+    barrels: [[-7,-2],[7,-2],[-7,2],[7,2],[-20,0],[20,0],[0,-20],[0,20],[-3,-10],[3,10]],
+  },
+  snow: {
+    name: 'Frozen Front',
+    groundColor: 0xd8dde0, skyColor: 0xb0bcc8, fogColor: 0xb0bcc8, fogNear: 40, fogFar: 80,
+    wallColor: 0x99aabb, concreteColor: 0x667788, ambientColor: 0x99aacc, sunColor: 0xccddff,
+    walls: [
+      { x: -8, z: -8, w: 3, d: 3 }, { x: 8, z: 8, w: 3, d: 3 },
+      { x: 8, z: -8, w: 3, d: 3 }, { x: -8, z: 8, w: 3, d: 3 },
+      { x: 0, z: -16, w: 8, d: 1 }, { x: 0, z: 16, w: 8, d: 1 },
+      { x: -16, z: 0, w: 1, d: 8 }, { x: 16, z: 0, w: 1, d: 8 },
+      { x: -20, z: -15, w: 4, d: 1 }, { x: 20, z: 15, w: 4, d: 1 },
+      { x: -5, z: 0, w: 1, d: 3 }, { x: 5, z: 0, w: 1, d: 3 },
+    ],
+    barrels: [[-8,-15],[8,-15],[-8,15],[8,15],[-15,-8],[15,-8],[-15,8],[15,8],[0,-8],[0,8]],
+  },
+  urban: {
+    name: 'Ruined City',
+    groundColor: 0x5a5a55, skyColor: 0x4a4a55, fogColor: 0x4a4a55, fogNear: 30, fogFar: 65,
+    wallColor: 0x555550, concreteColor: 0x444440, ambientColor: 0x666677, sunColor: 0xccccdd,
+    walls: [
+      { x: -10, z: -10, w: 5, d: 2 }, { x: 10, z: -10, w: 5, d: 2 },
+      { x: -10, z: 10, w: 5, d: 2 }, { x: 10, z: 10, w: 5, d: 2 },
+      { x: -20, z: 0, w: 3, d: 4 }, { x: 20, z: 0, w: 3, d: 4 },
+      { x: 0, z: -20, w: 4, d: 3 }, { x: 0, z: 20, w: 4, d: 3 },
+      { x: -5, z: -3, w: 2, d: 2 }, { x: 5, z: 3, w: 2, d: 2 },
+      { x: -15, z: -18, w: 2, d: 1 }, { x: 15, z: 18, w: 2, d: 1 },
+      { x: -3, z: -15, w: 1, d: 3 }, { x: 3, z: 15, w: 1, d: 3 },
+      { x: -18, z: -8, w: 1, d: 5 }, { x: 18, z: 8, w: 1, d: 5 },
+    ],
+    barrels: [[-12,-12],[12,-12],[-12,12],[12,12],[0,-12],[0,12],[-12,0],[12,0],[-6,-6],[6,6]],
+  },
+};
+let currentBattlefield = 'default';
 
 // ============================================================
 // 2. THREE.JS SETUP
@@ -569,16 +641,37 @@ function init() {
 const mapGrid = []; // 2D array for collision
 
 function buildMap() {
+  const bf = BATTLEFIELDS[currentBattlefield];
+
+  // Apply battlefield visuals
+  scene.background.setHex(bf.skyColor);
+  scene.fog.color.setHex(bf.fogColor);
+  scene.fog.near = bf.fogNear;
+  scene.fog.far = bf.fogFar;
+
+  // Update ground
+  scene.traverse(child => {
+    if (child.geometry && child.geometry.type === 'PlaneGeometry' && child.material.color) {
+      child.material.color.setHex(bf.groundColor);
+    }
+  });
+
+  // Update lighting
+  scene.traverse(child => {
+    if (child.isAmbientLight) child.color.setHex(bf.ambientColor);
+    if (child.isDirectionalLight) child.color.setHex(bf.sunColor);
+  });
+
   // Initialize grid
   const gridSize = MAP_SIZE;
   for (let x = 0; x < gridSize; x++) {
     mapGrid[x] = [];
     for (let z = 0; z < gridSize; z++) {
-      mapGrid[x][z] = 0; // 0=empty
+      mapGrid[x][z] = 0;
     }
   }
 
-  // Perimeter walls (indestructible)
+  // Perimeter walls
   for (let i = 0; i < gridSize; i++) {
     createWall(-HALF_MAP + 0.5, -HALF_MAP + i + 0.5, true);
     createWall(HALF_MAP - 0.5, -HALF_MAP + i + 0.5, true);
@@ -586,52 +679,21 @@ function buildMap() {
     createWall(-HALF_MAP + i + 0.5, HALF_MAP - 0.5, true);
   }
 
-  // Interior walls — strategic placement
-  const wallLayouts = [
-    // Central cross
-    { x: 0, z: 0, w: 3, d: 1, destructible: false },
-    { x: 0, z: 0, w: 1, d: 3, destructible: false },
-    // Corner fortifications
-    { x: -12, z: -12, w: 4, d: 1, destructible: true },
-    { x: -12, z: -10, w: 1, d: 3, destructible: true },
-    { x: 12, z: -12, w: 4, d: 1, destructible: true },
-    { x: 13, z: -10, w: 1, d: 3, destructible: true },
-    { x: -12, z: 12, w: 4, d: 1, destructible: true },
-    { x: -12, z: 10, w: 1, d: 3, destructible: true },
-    { x: 12, z: 12, w: 4, d: 1, destructible: true },
-    { x: 13, z: 10, w: 1, d: 3, destructible: true },
-    // Side walls
-    { x: -6, z: 0, w: 1, d: 5, destructible: true },
-    { x: 6, z: 0, w: 1, d: 5, destructible: true },
-    { x: 0, z: -8, w: 5, d: 1, destructible: true },
-    { x: 0, z: 8, w: 5, d: 1, destructible: true },
-    // Scattered cover
-    { x: -18, z: -4, w: 2, d: 1, destructible: true },
-    { x: 18, z: 4, w: 2, d: 1, destructible: true },
-    { x: -4, z: -18, w: 1, d: 2, destructible: true },
-    { x: 4, z: 18, w: 1, d: 2, destructible: true },
-  ];
-
-  wallLayouts.forEach(w => {
+  // Interior walls from battlefield layout
+  bf.walls.forEach(w => {
     for (let dx = 0; dx < w.w; dx++) {
       for (let dz = 0; dz < w.d; dz++) {
         const wx = w.x + dx;
         const wz = w.z + dz;
         if (Math.abs(wx) < HALF_MAP - 1 && Math.abs(wz) < HALF_MAP - 1) {
-          createWall(wx, wz, !w.destructible);
+          createWall(wx, wz, false);
         }
       }
     }
   });
 
-  // Explosive barrels
-  const barrelPositions = [
-    [-8, -6], [8, -6], [-8, 6], [8, 6],
-    [-3, -15], [3, -15], [-3, 15], [3, 15],
-    [-15, -3], [15, -3], [-15, 3], [15, 3],
-    [0, -4], [0, 4],
-  ];
-  barrelPositions.forEach(([x, z]) => createBarrel(x, z));
+  // Barrels
+  bf.barrels.forEach(([x, z]) => createBarrel(x, z));
 }
 
 function createWall(x, z, indestructible) {
@@ -1889,18 +1951,8 @@ function updateWaves(dt) {
     waveSpawned = false;
     killStreak = 0;
     currentWave++;
-    // Open upgrade shop
+    // Open upgrade shop (which handles next wave on close)
     openShop();
-  }
-
-  if (waveTimer > 0) {
-    waveTimer -= dt;
-    if (waveTimer <= 0) {
-      announceWave(currentWave);
-      spawnWave(currentWave);
-      spawnWavePowerups();
-      changeWeather();
-    }
   }
 }
 
@@ -1957,10 +2009,64 @@ function closeShop() {
   gameState = 'playing';
   // Apply upgrades to player
   applyUpgrades();
+  // Switch battlefield every 4 waves
+  selectBattlefield();
+  // Rebuild map with new battlefield
+  rebuildMap();
   // Start next wave
   announceWave(currentWave);
   spawnWave(currentWave);
   spawnWavePowerups();
+  changeWeather();
+}
+
+function selectBattlefield() {
+  const bfKeys = Object.keys(BATTLEFIELDS);
+  // Rotate through battlefields every 4 waves
+  const idx = Math.floor((currentWave - 1) / 4) % bfKeys.length;
+  const newBf = bfKeys[idx];
+  if (newBf !== currentBattlefield) {
+    currentBattlefield = newBf;
+    const bf = BATTLEFIELDS[currentBattlefield];
+    const el = document.getElementById('map-announce');
+    document.getElementById('map-name-text').textContent = bf.name;
+    el.classList.add('visible');
+    setTimeout(() => el.classList.remove('visible'), 3000);
+  }
+}
+
+function rebuildMap() {
+  // Remove all non-player, non-bullet entities
+  const toRemove = [];
+  entities.forEach(id => {
+    if (id === playerEntityId) return;
+    if (components.bullet.has(id)) return;
+    toRemove.push(id);
+  });
+  toRemove.forEach(id => {
+    entities.delete(id);
+    powerupEntities.delete(id);
+  });
+  // Remove meshes
+  toRemove.forEach(id => destroyEntity(id));
+  // Remove rubble
+  const rubble = [];
+  scene.traverse(child => {
+    if (child.isMesh && child.geometry && child.geometry.type === 'BoxGeometry' && child !== renderer.domElement) {
+      const h = child.position.y;
+      if (h < 0.2 && h > 0 && child.material && child.material.color) {
+        rubble.push(child);
+      }
+    }
+  });
+  rubble.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  // Clear weather particles
+  clearWeatherParticles();
+  // Rebuild map with new battlefield
+  buildMap();
+  // Move player to center
+  const tr = components.transform.get(playerEntityId);
+  if (tr) { tr.position.set(0, 0, 0); }
 }
 
 function renderShop() {
@@ -2197,6 +2303,7 @@ function restartGame() {
   shopTimer = 0;
   Object.keys(upgrades).forEach(k => upgrades[k].level = 0);
   currentWeather = 'clear';
+  currentBattlefield = 'default';
   clearWeatherParticles();
   stopRainSound();
   const clearEffect = WEATHER_EFFECTS.clear;
